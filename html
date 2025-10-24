@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Present Simple Platformer — Full (High Contrast)</title>
+  <style>
+    :root{
+      --bg-top:#071a2b;     /* fondo superior */
+      --bg-bot:#04121b;     /* fondo inferior */
+      --panel:#0f1724; 
+      --text:#e6eef8; 
+      --accent:#ff6b6b;
+
+      /* COLORES DE ALTO CONTRASTE */
+      --platform:#22d3ee;   /* cyan brillante */
+      --platform-border:#045a69;
+      --lava-top:#ff3b30;   /* lava intensa */
+      --lava-bot:#ff8a65;
+      --player-fill:#ffd93d;/* amarillo vivo */
+      --player-stroke:#6b3c00; /* borde oscuro del jugador */
+      --power-lava:#72e6a6;  /* power-up verde */
+      --power-score:#ffd166; /* power-up amarillo */
+    }
+    html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;background:linear-gradient(180deg,var(--bg-top) 0%, var(--bg-bot) 100%);color:var(--text)}
+    #gameWrap{display:flex;flex-direction:column;height:100vh;gap:8px;padding:8px}
+    canvas{display:block;background:linear-gradient(180deg,#071a2b 0%, #04131b 100%);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.6);margin:auto}
+    .hud{display:flex;gap:8px;align-items:center;justify-content:space-between;max-width:1100px;margin:0 auto}
+    .panel{background:rgba(255,255,255,0.03);padding:8px 12px;border-radius:10px;min-width:120px;text-align:center}
+    .questionPanel{background:rgba(255,255,255,0.02);padding:10px;border-radius:10px;text-align:center;max-width:1100px;margin:0 auto}
+    .options{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:8px}
+    .optBtn{background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);padding:8px 12px;border-radius:8px;cursor:pointer;min-width:120px;color:#ffffff}
+    .optBtn:hover{transform:translateY(-2px)}
+    .footer{display:flex;gap:8px;align-items:center;justify-content:center;padding:6px}
+    .small{font-size:12px;opacity:.9}
+    #gameOver, #mainMenu, #instructionsModal {position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:auto;background:rgba(0,0,0,0.45)}
+    .menuCard, .goCard, .instCard{background:var(--panel);padding:20px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.6);text-align:center;min-width:260px}
+    .menuCard h1{margin:6px 0}
+    button{margin-top:12px;padding:8px 14px;border-radius:8px;border:0;background:var(--accent);color:white;cursor:pointer}
+    #levelOverlay{position:fixed;left:50%;top:12%;transform:translateX(-50%);background:rgba(15,23,36,0.92);padding:18px 28px;border-radius:12px;font-weight:700;font-size:20px;color:white;display:none;box-shadow:0 8px 30px rgba(0,0,0,0.6)}
+    @media (max-width:700px){ .optBtn{min-width:45%} .menuCard{width:90%} }
+  </style>
+</head>
+<body>
+  <!-- MAIN MENU -->
+  <div id="mainMenu">
+    <div class="menuCard">
+      <h1>Present Simple Platformer</h1>
+      <p>Responde correctamente para saltar. Falla y la lava sube.</p>
+      <button id="playBtn">Jugar</button>
+      <button id="instrBtn">Instrucciones</button>
+      <div style="margin-top:10px;font-size:13px;opacity:.9">Best: <span id="menuBest">0</span></div>
+    </div>
+  </div>
+
+  <!-- INSTRUCTIONS -->
+  <div id="instructionsModal" style="display:none">
+    <div class="instCard">
+      <h2>Instrucciones</h2>
+      <p>Haz clic/toca la opción correcta. Cada acierto te lanzará a la siguiente plataforma. Cada fallo te quita una vida y acelera la lava. Recoge power-ups en algunas plataformas para reducir lava o ganar puntos extras. Llega lo más alto posible.</p>
+      <button id="closeInstr">Cerrar</button>
+    </div>
+  </div>
+
+  <!-- GAME -->
+  <div id="gameWrap" style="display:none">
+    <div class="hud">
+      <div class="panel">Score: <span id="score">0</span></div>
+      <div class="panel">Best: <span id="best">0</span></div>
+      <div class="panel">Vidas: <span id="lives">3</span></div>
+    </div>
+
+    <canvas id="game" width="1000" height="600"></canvas>
+
+    <div class="questionPanel">
+      <div id="sentence" style="font-weight:600;font-size:18px">Loading question...</div>
+      <div class="options" id="options"></div>
+    </div>
+
+    <div class="footer small">Correcto = salto. Incorrecto = lava sube y pierdes vida. Power-ups aparecen aleatoriamente.</div>
+  </div>
+
+  <!-- GAME OVER -->
+  <div id="gameOver" style="display:none">
+    <div class="goCard">
+      <h2 id="goTitle">Game Over</h2>
+      <p id="goScore">You reached: 0</p>
+      <div style="display:flex;gap:8px;justify-content:center">
+        <button id="playAgain">Jugar otra vez</button>
+        <button id="toMenu">Menú principal</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="levelOverlay">Level 1</div>
+
+<script>
+/* ---------------------------
+   Config y variables globales
+   --------------------------- */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+let W = canvas.width, H = canvas.height;
+let rafId = null;
+
+let player, platforms, lava, score, best, lives, gameOver, cameraOffsetY, worldOffset, prevY;
+let questionPool, currentQ, answerLocked, lanes, level, levelTransitioning, shakeTimer;
+let powerUps = []; // array of {x,y,type,active,platformIndex}
+
+/* ---------- Sonidos simples (WebAudio) ---------- */
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function beep(frequency=440, time=0.08, type='sine', gain=0.07){
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type; o.frequency.value = frequency;
+  g.gain.value = gain;
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start();
+  o.stop(audioCtx.currentTime + time);
+}
+
+/* ---------------------------
+   Banco de preguntas (ampliado)
+   --------------------------- */
+/* NOTA: uso comillas backtick para evitar problemas con o'clock */
+const QUESTIONS = [
+  {sentence: `She ___ to school every day.`, correct: 'goes', options:['goes','go','going','gone']},
+  {sentence: `They ___ coffee in the morning.`, correct: 'drink', options:['drinks','drink','drinking','drunk']},
+  {sentence: `I ___ English very well.`, correct: 'speak', options:['speaks','speak','speaking','spoken']},
+  {sentence: `Do you ___ soccer?`, correct: 'play', options:['play','plays','playing','played']},
+  {sentence: `He never ___ late.`, correct: 'is', options:['are','is','be','am']},
+  {sentence: `She ___ not like pizza.`, correct: 'does', options:['do','does','did','doing']},
+  {sentence: `Where ___ you live?`, correct: 'do', options:['do','does','did','done']},
+  {sentence: `It ___ a lot in autumn.`, correct: 'rains', options:['rain','rains','raining','rained']},
+  {sentence: `We ___ pizza on Fridays.`, correct: 'eat', options:['eats','eat','eating','ate']},
+  {sentence: `The sun ___ in the east.`, correct: 'rises', options:['rise','rises','rising','rose']},
+  {sentence: `He ___ breakfast at 7am.`, correct: 'has', options:['have','has','having','had']},
+  {sentence: `You always ___ good ideas.`, correct: 'have', options:['has','have','having','had']},
+  {sentence: `She often ___ her bike to work.`, correct: 'rides', options:['ride','rides','riding','rode']},
+  {sentence: `Tom and Ana ___ in the same class.`, correct: 'are', options:['is','are','am','be']},
+  {sentence: `Water ___ at 100°C.`, correct: 'boils', options:['boil','boils','boiling','boiled']},
+  {sentence: `He ___ two languages.`, correct: 'speaks', options:['speak','speaks','speaking','spoken']},
+  {sentence: `The shop ___ at 9 o'clock.`, correct: 'opens', options:['open','opens','opening','opened']},
+  {sentence: `Birds usually ___ in the morning.`, correct: 'sing', options:['sings','sing','singing','sang']},
+  {sentence: `My sister ___ the piano well.`, correct: 'plays', options:['play','plays','playing','played']},
+  {sentence: `We ___ to music on Sundays.`, correct: 'listen', options:['listens','listen','listening','listened']}
+];
+
+function shuffle(arr){ for(let i=arr.length-1;i>0;i--){let j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];} }
+
+/* ---------------------------
+   UI Buttons
+   --------------------------- */
+document.getElementById('playBtn').addEventListener('click', ()=>{ startGame(); });
+document.getElementById('instrBtn').addEventListener('click', ()=>{ document.getElementById('instructionsModal').style.display='flex'; });
+document.getElementById('closeInstr').addEventListener('click', ()=>{ document.getElementById('instructionsModal').style.display='none'; });
+document.getElementById('playAgain').addEventListener('click', ()=>{ startGame(); });
+document.getElementById('toMenu').addEventListener('click', ()=>{ toMenu(); });
+
+/* ---------------------------
+   Start / Menu / Init
+   --------------------------- */
+function startGame(){
+  // Resume audio context on first gesture (some browsers require)
+  if(audioCtx.state === 'suspended') audioCtx.resume();
+
+  document.getElementById('mainMenu').style.display='none';
+  document.getElementById('gameOver').style.display='none';
+  document.getElementById('gameWrap').style.display='flex';
+  init();
+}
+
+function toMenu(){
+  document.getElementById('mainMenu').style.display='flex';
+  document.getElementById('gameWrap').style.display='none';
+  document.getElementById('gameOver').style.display='none';
+  cancelAnimationFrame(rafId);
+}
+
+function init(){
+  if(rafId) cancelAnimationFrame(rafId);
+
+  W = canvas.width = Math.min(window.innerWidth-32, 1100);
+  H = canvas.height = Math.max(420, window.innerHeight - 240);
+
+  lanes = [W * 0.20, W * 0.50, W * 0.80];
+
+  // estado inicial
+  player = {x:0,y:0,w:36,h:48,vx:0,vy:0,autoJumping:false,jumpProgress:0,targetPlatform:null};
+  platforms = [];
+  powerUps = [];
+
+  cameraOffsetY = 0;
+  worldOffset = 0;
+  prevY = 0;
+  score = 0;
+  lives = 3;
+  gameOver = false;
+  lava = {y: H + 200, speed: 0.32};
+  level = 1;
+  levelTransitioning = false;
+  shakeTimer = 0;
+  answerLocked = false;
+
+  // preguntas
+  questionPool = QUESTIONS.slice();
+  shuffle(questionPool);
+  pickQuestion();
+
+  buildScenePlatforms();
+
+  // cargar best
+  const saved = localStorage.getItem('ps_best_v2');
+  best = saved ? parseInt(saved,10) : 0;
+  document.getElementById('menuBest').innerText = best;
+
+  updateHUD();
+  rafId = requestAnimationFrame(loop);
+  beep(660,0.06,'sine',0.08);
+}
+
+/* ---------------------------
+   HUD, preguntas y UI
+   --------------------------- */
+function updateHUD(){
+  document.getElementById('score').innerText = Math.floor(score);
+  document.getElementById('best').innerText = best || 0;
+  document.getElementById('lives').innerText = lives;
+}
+
+function pickQuestion(){
+  if(!Array.isArray(questionPool) || questionPool.length === 0){
+    questionPool = QUESTIONS.slice(); shuffle(questionPool);
+  }
+  currentQ = questionPool.pop();
+  renderOptions();
+}
+
+function renderOptions(){
+  const optWrap = document.getElementById('options');
+  optWrap.innerHTML = '';
+  if(!currentQ){
+    document.getElementById('sentence').innerText = 'No hay preguntas.';
+    return;
+  }
+  let opts = (currentQ.options || []).slice();
+  shuffle(opts);
+  document.getElementById('sentence').innerText = currentQ.sentence;
+  for(const o of opts){
+    const btn = document.createElement('button');
+    btn.className = 'optBtn';
+    btn.innerText = o;
+    btn.onclick = ()=> chooseOption(o);
+    optWrap.appendChild(btn);
+  }
+}
+
+/* ---------------------------
+   Construcción de plataformas
+   --------------------------- */
+function buildScenePlatforms(){
+  platforms = [];
+  // plataforma base grande
+  const bottom = {x: W/2, y: H - 60, w: 180, h: 18};
+  platforms.push(bottom);
+  let lastY = bottom.y;
+
+  // generar plataformas hacia arriba
+  for(let i=0;i<14;i++){
+    const gap = Math.random()*60 + 80;
+    const y = lastY - gap;
+    const x = lanes[Math.floor(Math.random() * lanes.length)];
+    platforms.push({x, y, w: 120, h: 14});
+    lastY = y;
+  }
+
+  player.x = bottom.x;
+  player.y = bottom.y - bottom.h/2 - player.h/2;
+  player.vx = 0; player.vy = 0;
+
+  lava.y = H + 200;
+
+  // generar power-ups en algunas plataformas (aleatorio)
+  powerUps = [];
+  platforms.forEach((p, idx) => {
+    if(idx>0 && Math.random() < 0.18){ // 18% chance
+      const types = ['lavaDown','scoreBonus'];
+      const type = types[Math.floor(Math.random()*types.length)];
+      powerUps.push({platformIndex: idx, x: p.x, y: p.y - 30, type: type, active:true});
+    }
+  });
+}
+
+/* ---------------------------
+   Mecánicas de respuesta
+   --------------------------- */
+function chooseOption(opt){
+  if(gameOver || answerLocked) return;
+
+  if(opt === currentQ.correct){
+    // acierto
+    score += 12;
+    beep(880,0.08,'triangle',0.06);
+    // bajar un poco la velocidad de lava como recompensa
+    lava.speed = Math.max(0.26, lava.speed - 0.06);
+    // salto auto a la siguiente plataforma
+    jumpToNextPlatform();
+    pickQuestion();
+  } else {
+    // fallo
+    beep(220,0.14,'sawtooth',0.09);
+    lives--;
+    shakeTimer = 12;
+    lava.speed += 0.45;
+    score = Math.max(0, score - 3);
+    updateHUD();
+    if(lives <= 0){
+      // game over con retardo pequeño
+      setTimeout(()=> endGame(), 350);
+      return;
+    }
+    // nueva pregunta para seguir
+    pickQuestion();
+  }
+  updateHUD();
+}
+
+/* ---------------------------
+   Saltos automáticos (cuando aciertas)
+   --------------------------- */
+function jumpToNextPlatform(){
+  // encontrar la plataforma más cercana por encima
+  let target = null;
+  let bestDy = Infinity;
+  for(const p of platforms){
+    if(p.y < player.y - 20){
+      let dy = player.y - p.y;
+      if(dy < bestDy){
+        bestDy = dy;
+        target = p;
+      }
+    }
+  }
+  if(!target) return;
+
+  player.autoJumping = true;
+  player.targetPlatform = target;
+  player.jumpProgress = 0;
+
+  const dist = Math.hypot(player.x - target.x, player.y - target.y);
+  player.jumpDuration = Math.max(22, Math.floor(dist / 6));
+
+  player.jumpStartX = player.x;
+  player.jumpStartY = player.y;
+  player.jumpEndX = target.x;
+  player.jumpEndY = target.y - (target.h/2) - (player.h/2);
+
+  answerLocked = true;
+}
+
+/* ---------------------------
+   Colisiones y update loop
+   --------------------------- */
+const gravity = 0.85;
+
+function loop(){
+  prevY = player.y;
+
+  if(player.autoJumping){
+    player.jumpProgress += 1 / (player.jumpDuration || 30);
+    let t = Math.min(1, player.jumpProgress);
+    const ease = t*(2-t);
+    const sx = player.jumpStartX, sy = player.jumpStartY;
+    const ex = player.jumpEndX, ey = player.jumpEndY;
+    player.x = sx + (ex - sx) * ease;
+    const baseY = sy + (ey - sy) * ease;
+    const arcHeight = Math.max(50, (sy - ey) * 0.45 + 18);
+    player.y = baseY - arcHeight * Math.sin(Math.PI * ease);
+
+    // la lava sube ligeramente durante el salto (mantener tensión)
+    lava.y -= lava.speed * 0.25;
+
+    // cámara sigue
+    const desiredScreenY = H * 0.4;
+    const desiredWorldY = cameraOffsetY + desiredScreenY;
+    let diff = player.y - desiredWorldY;
+    if(diff < 0) cameraOffsetY += diff;
+
+    if(t >= 1){
+      // al aterrizar, verificar powerups en la plataforma
+      player.autoJumping = false;
+      answerLocked = false;
+      handleLanding();
+    }
+    updateHUD();
+    draw();
+    rafId = requestAnimationFrame(loop);
+    return;
+  }
+
+  // física normal
+  player.vy += gravity;
+  player.y += player.vy;
+  player.x += player.vx;
+
+  // colisiones con plataformas (sólo al caer)
+  if(player.vy > 0){
+    for(const p of platforms){
+      const platformTop = p.y - p.h/2;
+      const playerBottomPrev = prevY + player.h/2;
+      const playerBottomNow = player.y + player.h/2;
+      const overlapX = (player.x + player.w/2 > p.x - p.w/2) && (player.x - player.w/2 < p.x + p.w/2);
+      if(playerBottomPrev <= platformTop && playerBottomNow >= platformTop && overlapX){
+        player.y = platformTop - player.h/2;
+        player.vy = 0;
+        player.vx = 0;
+        handleLanding();
+        break;
+      }
+    }
+  }
+
+  // lava efecto
+  lava.y -= lava.speed;
+  if(player.y + player.h/2 > lava.y){
+    endGame();
+    return;
+  }
+
+  // cámara: si jugador sube, mover cámara
+  {
+    let desiredScreenY = H * 0.4;
+    let desiredWorldY = cameraOffsetY + desiredScreenY;
+    let diff = player.y - desiredWorldY;
+    if(diff < 0) cameraOffsetY += diff;
+  }
+  worldOffset = Math.max(worldOffset, -cameraOffsetY);
+
+  // cuando la cámara ha subido lo suficiente, regenerar plataformas más arriba y aumentar nivel
+  if(worldOffset > 900 + (level-1)*200){
+    levelUp();
+  }
+
+  // actualizar HUD y dibujar
+  updateHUD();
+  draw();
+  rafId = requestAnimationFrame(loop);
+}
+
+/* ---------------------------
+   Al aterrizar en plataforma
+   --------------------------- */
+function handleLanding(){
+  // verificar power-ups en la plataforma donde aterrizamos
+  for(const pu of powerUps){
+    if(!pu.active) continue;
+    const pidx = pu.platformIndex;
+    const p = platforms[pidx];
+    if(!p) continue;
+    // si player está sobre esa plataforma (coordenadas aproximadas)
+    const dx = Math.abs(player.x - pu.x);
+    const dy = Math.abs(player.y - (p.y - p.h/2 - player.h/2));
+    if(dx < 40 && dy < 20){
+      // activar power-up
+      pu.active = false;
+      if(pu.type === 'lavaDown'){
+        lava.speed = Math.max(0.22, lava.speed - 0.6);
+        score += 6;
+        beep(520,0.09,'sine',0.06);
+      } else if(pu.type === 'scoreBonus'){
+        score += 20;
+        beep(1040,0.12,'triangle',0.08);
+      }
+      updateHUD();
+    }
+  }
+}
+
+/* ---------------------------
+   Subir de nivel
+   --------------------------- */
+function levelUp(){
+  if(levelTransitioning) return;
+  levelTransitioning = true;
+  level++;
+  // aumentar dificultad
+  lava.speed = Math.min(20, lava.speed + 0.18 + (level*0.02));
+  showLevelOverlay('Level ' + level, 900);
+  // regenerar plataformas manteniendo al jugador en pantalla
+  buildScenePlatforms();
+  cameraOffsetY = 0;
+  worldOffset = 0;
+  answerLocked = false;
+  player.autoJumping = false;
+  player.vx = 0; player.vy = 0;
+  setTimeout(()=>{ levelTransitioning = false; }, 900);
+}
+
+/* ---------------------------
+   Terminar juego
+   --------------------------- */
+function endGame(){
+  if(gameOver) return;
+  gameOver = true;
+  // guardar best
+  best = Math.max(best || 0, Math.floor(score));
+  localStorage.setItem('ps_best_v2', best);
+  document.getElementById('goScore').innerText = 'You reached: ' + Math.floor(score);
+  document.getElementById('best').innerText = best;
+  document.getElementById('menuBest').innerText = best;
+  document.getElementById('gameOver').style.display = 'flex';
+  beep(160,0.35,'sawtooth',0.1);
+  cancelAnimationFrame(rafId);
+}
+
+/* ---------------------------
+   Dibujado del juego (HIGH CONTRAST)
+   --------------------------- */
+function draw(){
+  ctx.clearRect(0,0,W,H);
+
+  // fondo por nivel (pequeños cambios por nivel)
+  const bg1 = (level%3===1) ? '#083147' : (level%3===2 ? '#0a2a3a' : '#061826');
+  const bg2 = (level%3===1) ? '#031726' : (level%3===2 ? '#051722' : '#04121b');
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0, bg1); g.addColorStop(1, bg2);
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+  ctx.save();
+  ctx.translate(0, -cameraOffsetY);
+
+  // plataformas (con borde oscuro para contraste)
+  for(const p of platforms){
+    // platform shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.16)';
+    ctx.fillRect(p.x - p.w/2, p.y + p.h/2, p.w, 7);
+    // platform body
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--platform').trim() || '#22d3ee';
+    roundRect(ctx, p.x - p.w/2, p.y - p.h/2, p.w, p.h, 6, true, false);
+    // border
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--platform-border').trim() || '#045a69';
+    ctx.lineWidth = 3;
+    roundRect(ctx, p.x - p.w/2 + 0.5, p.y - p.h/2 + 0.5, p.w-1, p.h-1, 6, false, true);
+  }
+
+  // power-ups (visibles)
+  for(const pu of powerUps){
+    if(!pu.active) continue;
+    ctx.save();
+    ctx.translate(pu.x, pu.y);
+    if(pu.type === 'lavaDown'){
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--power-lava').trim() || '#72e6a6';
+      ctx.beginPath(); ctx.arc(0,0,11,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#023'; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('-',0,0);
+    } else {
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--power-score').trim() || '#ffd166';
+      ctx.beginPath(); ctx.arc(0,0,11,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#543'; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('+',0,0);
+    }
+    ctx.restore();
+  }
+
+  // lava with gradient (high contrast)
+  const lavaGrad = ctx.createLinearGradient(0, lava.y, 0, H);
+  lavaGrad.addColorStop(0, getComputedStyle(document.documentElement).getPropertyValue('--lava-top').trim() || '#ff3b30');
+  lavaGrad.addColorStop(1, getComputedStyle(document.documentElement).getPropertyValue('--lava-bot').trim() || '#ff8a65');
+  ctx.fillStyle = lavaGrad;
+  ctx.fillRect(0, lava.y, W, H - lava.y + 200);
+  ctx.fillStyle = 'rgba(0,0,0,0.08)';
+  ctx.fillRect(0, lava.y - 6, W, 6);
+
+  // shake effect on player
+  ctx.save();
+  if(shakeTimer > 0){
+    const s = (Math.random()*6 - 3); ctx.translate(s,0); shakeTimer--;
+  }
+
+  // jugador (más "animado": ojos móviles según vx, con borde para contraste)
+  ctx.translate(player.x, player.y);
+  // body fill
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--player-fill').trim() || '#ffd93d';
+  roundRect(ctx, -player.w/2, -player.h/2, player.w, player.h, 8, true, false);
+  // body stroke (borde oscuro)
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--player-stroke').trim() || '#6b3c00';
+  roundRect(ctx, -player.w/2 + 0.5, -player.h/2 + 0.5, player.w-1, player.h-1, 8, false, true);
+  // ojos (negro sobre amarillo: visible)
+  ctx.fillStyle = '#000';
+  ctx.fillRect(-10, -12, 6, 6);
+  ctx.fillRect(4, -12, 6, 6);
+  ctx.restore();
+
+  ctx.restore();
+
+  // overlay HUD area (semi)
+  ctx.fillStyle = 'rgba(255,255,255,0.03)'; ctx.fillRect(8,8,260,48);
+  ctx.fillStyle='white'; ctx.font='14px sans-serif';
+}
+
+function roundRect(ctx,x,y,w,h,r,fill,stroke){
+  if(typeof r==='undefined') r = 6;
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+  if(fill) ctx.fill();
+  if(stroke) ctx.stroke();
+}
+
+/* ---------------------------
+   Eventos ventana / guardado
+   --------------------------- */
+window.addEventListener('resize', ()=>{ // reiniciar dimensiones pero sólo si el juego está activo
+  if(document.getElementById('gameWrap').style.display === 'flex') init();
+});
+window.addEventListener('beforeunload', ()=>{ localStorage.setItem('ps_best_v2', best); });
+
+/* ---------------------------
+   Inicialización visual del menú
+   --------------------------- */
+document.getElementById('best').innerText = localStorage.getItem('ps_best_v2') || 0;
+
+/* ---------------------------
+   Fin del script
+   --------------------------- */
+</script>
+</body>
+</html>
+
+
+
